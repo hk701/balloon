@@ -42,7 +42,7 @@
 </head>
 <body>
   <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 ARR 体验</button>
+  <button id="permission-btn" style="display: none;">点击启动 AR5 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -53,6 +53,12 @@
     let analyser, audioData;
     let audioContext;
     let isAudioReady = false;
+    
+    // ========== 全局可调参数 ==========
+    const MAX_BALLOONS = 40;        // 最大气球数量
+    const AUDIO_THRESHOLD = 5;     // 声音触发阈值
+    const AUDIO_COOLDOWN = 100;     // 声音触发冷却时间(ms)
+    // ==================================
     
     // 陀螺仪相关变量
     let deviceOrientation = { alpha: 0, beta: 0, gamma: 0 };
@@ -403,14 +409,14 @@
       }
       const average = sum / audioData.length;
       
-      if (average > 25 && balloons.length < 30) {
+      if (average > AUDIO_THRESHOLD && balloons.length < MAX_BALLOONS) {
         createBalloon();
         
         // 更短的冷却时间，更灵敏
         isAudioReady = false;
         setTimeout(() => {
           isAudioReady = true;
-        }, 100); // 减少到100ms
+        }, AUDIO_COOLDOWN);
       }
     }
 
@@ -433,7 +439,7 @@
     // 点击备用触发
     document.addEventListener('click', (e) => {
       // 避免点击按钮时触发
-      if (e.target.id !== 'permission-btn' && balloons.length < 30) {
+      if (e.target.id !== 'permission-btn' && balloons.length < MAX_BALLOONS) {
         createBalloon();
       }
     });
