@@ -42,7 +42,7 @@
 </head>
 <body>
   <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 ARD 体验</button>
+  <button id="permission-btn" style="display: none;">点击启动 ARR 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -171,28 +171,45 @@
     function updateCameraRotation() {
       if (!hasGyroscope || !initialOrientation) return;
       
-      // 只使用方位角（alpha）进行水平旋转
-      // 这样可以避免设备倾斜时产生的错误移动
+      // ========== 可调参数 ==========
+      const smoothingFactor = 0.15;  // 平滑度：0.01-1.0
+      const sensitivity = 1.0;        // 灵敏度：0.5-2.0
+      const deadZone = 2;            // 死区：0-10度
+      const enableTilt = false;       // 是否启用俯仰
+      const tiltLimit = 30;          // 俯仰限制角度
+      const tiltFactor = 0.3;        // 俯仰影响系数
+      // ==============================
       
-      // 计算相对于初始方向的水平旋转
+      // 计算水平旋转
       let deltaAlpha = deviceOrientation.alpha - initialOrientation.alpha;
       
-      // 处理360度边界问题
+      // 处理360度边界
       if (deltaAlpha > 180) deltaAlpha -= 360;
       if (deltaAlpha < -180) deltaAlpha += 360;
+      
+      // 应用死区
+      if (Math.abs(deltaAlpha) < deadZone) deltaAlpha = 0;
+      
+      // 应用灵敏度
+      deltaAlpha *= sensitivity;
       
       // 转换为弧度
       const targetRotationY = -THREE.MathUtils.degToRad(deltaAlpha);
       
-      // 平滑过渡
-      const smoothingFactor = 0.15;
-      
-      // 只应用Y轴旋转（水平旋转）
-      // 完全忽略设备的倾斜和翻滚
+      // 平滑过渡Y轴
       worldContainer.rotation.y += (targetRotationY - worldContainer.rotation.y) * smoothingFactor;
       
-      // 重置其他轴，确保没有倾斜
-      worldContainer.rotation.x = 0;
+      // 处理俯仰（可选）
+      if (enableTilt) {
+        let deltaBeta = deviceOrientation.beta - initialOrientation.beta;
+        deltaBeta = Math.max(-tiltLimit, Math.min(tiltLimit, deltaBeta));
+        const targetRotationX = -THREE.MathUtils.degToRad(deltaBeta) * tiltFactor;
+        worldContainer.rotation.x += (targetRotationX - worldContainer.rotation.x) * smoothingFactor;
+      } else {
+        worldContainer.rotation.x = 0;
+      }
+      
+      // Z轴始终保持为0
       worldContainer.rotation.z = 0;
     }
 
