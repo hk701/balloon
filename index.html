@@ -42,7 +42,7 @@
 </head>
 <body>
   <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 ARC 体验</button>
+  <button id="permission-btn" style="display: none;">点击启动 ARA 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -169,38 +169,31 @@
     }
 
     function updateCameraRotation() {
-      if (!hasGyroscope) return;
+      if (!hasGyroscope || !initialOrientation) return;
       
-      // 只使用水平旋转（方位角），忽略设备倾斜
-      // alpha: 设备绕 Z 轴旋转（方位角 - 左右转动）
-      // beta: 设备绕 X 轴旋转（俯仰角 - 前后倾斜）- 限制使用
-      // gamma: 设备绕 Y 轴旋转（翻滚角 - 左右倾斜）- 限制使用
+      // 只使用方位角（alpha）进行水平旋转
+      // 这样可以避免设备倾斜时产生的错误移动
       
-      // 计算相对于初始方向的旋转
-      const alpha = initialOrientation ? 
-        (deviceOrientation.alpha - initialOrientation.alpha) : deviceOrientation.alpha;
+      // 计算相对于初始方向的水平旋转
+      let deltaAlpha = deviceOrientation.alpha - initialOrientation.alpha;
       
-      // 将角度转换为弧度
-      const alphaRad = THREE.MathUtils.degToRad(alpha);
+      // 处理360度边界问题
+      if (deltaAlpha > 180) deltaAlpha -= 360;
+      if (deltaAlpha < -180) deltaAlpha += 360;
       
-      // 限制俯仰角的影响（只取一小部分）
-      const betaRad = THREE.MathUtils.degToRad(deviceOrientation.beta - 90) * 0.3;
-      
-      // 几乎忽略翻滚角
-      const gammaRad = THREE.MathUtils.degToRad(deviceOrientation.gamma) * 0.1;
+      // 转换为弧度
+      const targetRotationY = -THREE.MathUtils.degToRad(deltaAlpha);
       
       // 平滑过渡
-      const smoothingFactor = 0.1;
+      const smoothingFactor = 0.15;
       
-      // 只应用Y轴旋转（水平旋转）为主
-      const targetRotationY = -alphaRad;
-      const targetRotationX = -betaRad * 0.5; // 轻微的上下视角变化
-      const targetRotationZ = -gammaRad * 0.3; // 极小的倾斜补偿
-      
-      // 平滑插值到目标旋转
+      // 只应用Y轴旋转（水平旋转）
+      // 完全忽略设备的倾斜和翻滚
       worldContainer.rotation.y += (targetRotationY - worldContainer.rotation.y) * smoothingFactor;
-      worldContainer.rotation.x += (targetRotationX - worldContainer.rotation.x) * smoothingFactor;
-      worldContainer.rotation.z += (targetRotationZ - worldContainer.rotation.z) * smoothingFactor;
+      
+      // 重置其他轴，确保没有倾斜
+      worldContainer.rotation.x = 0;
+      worldContainer.rotation.z = 0;
     }
 
     async function initCameraAndAudio() {
