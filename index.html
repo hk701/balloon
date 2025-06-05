@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AR 红色气球</title>
+  <title>AR 红色气球 - 陀螺仪版</title>
   <style>
     body {
       margin: 0;
@@ -22,11 +22,27 @@
       padding: 10px;
       border-radius: 5px;
       font-size: 14px;
+      z-index: 100;
+    }
+    #permission-btn {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      padding: 20px 40px;
+      font-size: 18px;
+      background: #ff0000;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      z-index: 200;
     }
   </style>
 </head>
 <body>
   <div id="info">对着麦克风说话释放红色气球 🎈</div>
+  <button id="permission-btn" style="display: none;">点击启动 AR 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -37,6 +53,14 @@
     let analyser, audioData;
     let audioContext;
     let isAudioReady = false;
+    
+    // 陀螺仪相关变量
+    let deviceOrientation = { alpha: 0, beta: 0, gamma: 0 };
+    let initialOrientation = null;
+    let hasGyroscope = false;
+    
+    // 世界空间容器（用于固定气球在世界坐标中）
+    let worldContainer;
 
     init();
     animate();
@@ -45,20 +69,24 @@
       // 创建场景
       scene = new THREE.Scene();
       
-      // 创建相机
+      // 创建相机（增大FOV以获得更好的AR效果）
       camera = new THREE.PerspectiveCamera(
-        75, 
+        80, 
         window.innerWidth / window.innerHeight, 
         0.1, 
         1000
       );
-      camera.position.z = 5;
+      camera.position.set(0, 0, 0);
 
       // 创建渲染器
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.setPixelRatio(window.devicePixelRatio);
       document.body.appendChild(renderer.domElement);
+
+      // 创建世界容器（所有气球都添加到这个容器中）
+      worldContainer = new THREE.Group();
+      scene.add(worldContainer);
 
       // 添加光照
       const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
@@ -68,80 +96,162 @@
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
       scene.add(ambientLight);
 
-      // 初始化摄像头和音频
-      initCameraAndAudio();
+      // 检查设备方向权限（iOS 13+需要）
+      if (typeof DeviceOrientationEvent !== 'undefined' && 
+          typeof DeviceOrientationEvent.requestPermission === 'function') {
+        // iOS 13+ 需要用户交互
+        document.getElementById('permission-btn').style.display = 'block';
+        document.getElementById('permission-btn').onclick = requestPermissions;
+      } else {
+        // 其他设备直接初始化
+        initDeviceOrientation();
+        initCameraAndAudio();
+      }
 
       // 窗口大小调整
       window.addEventListener('resize', onWindowResize);
     }
 
+    async function requestPermissions() {
+      try {
+        // 请求陀螺仪权限
+        const response = await DeviceOrientationEvent.requestPermission();
+        if (response === 'granted') {
+          initDeviceOrientation();
+        }
+        
+        // 隐藏按钮
+        document.getElementById('permission-btn').style.display = 'none';
+        
+        // 初始化摄像头和音频
+        await initCameraAndAudio();
+      } catch (error) {
+        console.error('权限请求失败:', error);
+        alert('需要陀螺仪权限才能获得最佳体验');
+      }
+    }
+
+    function initDeviceOrientation() {
+      // 监听设备方向变化
+      window.addEventListener('deviceorientation', handleOrientation);
+      
+      // 检测是否有陀螺仪
+      setTimeout(() => {
+        if (deviceOrientation.alpha === 0 && 
+            deviceOrientation.beta === 0 && 
+            deviceOrientation.gamma === 0) {
+          console.log('设备可能不支持陀螺仪');
+          hasGyroscope = false;
+        } else {
+          hasGyroscope = true;
+          console.log('陀螺仪已启用');
+        }
+      }, 1000);
+    }
+
+    function handleOrientation(event) {
+      if (event.alpha !== null && event.beta !== null && event.gamma !== null) {
+        deviceOrientation = {
+          alpha: event.alpha,
+          beta: event.beta,
+          gamma: event.gamma
+        };
+        
+        // 记录初始方向
+        if (!initialOrientation) {
+          initialOrientation = { ...deviceOrientation };
+        }
+        
+        hasGyroscope = true;
+      }
+    }
+
+    function updateCameraRotation() {
+      if (!hasGyroscope) return;
+      
+      // 计算相对于初始方向的旋转
+      const alpha = initialOrientation ? 
+        (deviceOrientation.alpha - initialOrientation.alpha) : deviceOrientation.alpha;
+      
+      // 将设备方向转换为相机旋转
+      // alpha: 设备绕 Z 轴旋转（方位角）
+      // beta: 设备绕 X 轴旋转（俯仰角）
+      // gamma: 设备绕 Y 轴旋转（翻滚角）
+      
+      const alphaRad = THREE.MathUtils.degToRad(alpha);
+      const betaRad = THREE.MathUtils.degToRad(deviceOrientation.beta - 90);
+      const gammaRad = THREE.MathUtils.degToRad(deviceOrientation.gamma);
+      
+      // 创建旋转矩阵
+      const rotationMatrix = new THREE.Matrix4();
+      rotationMatrix.makeRotationFromEuler(
+        new THREE.Euler(betaRad, alphaRad, gammaRad, 'YXZ')
+      );
+      
+      // 应用反向旋转到世界容器，这样气球会保持在世界坐标中
+      worldContainer.rotation.setFromRotationMatrix(rotationMatrix.invert());
+    }
+
     async function initCameraAndAudio() {
       try {
-        // 请求摄像头和麦克风权限
-        const stream = await navigator.mediaDevices.getUserMedia({
+        // 分别请求视频和音频
+        const videoStream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: 'environment', // 后置摄像头
+            facingMode: 'environment',
             width: { ideal: 1920 },
             height: { ideal: 1080 }
           },
-          audio: true
+          audio: false
         });
 
-        // 设置视频流（静音，避免回音）
+        // 设置视频流
         video = document.createElement('video');
-        video.srcObject = stream;
+        video.srcObject = videoStream;
         video.setAttribute('playsinline', '');
-        video.setAttribute('muted', ''); // 确保视频静音
-        video.muted = true; // 双重保证静音
+        video.setAttribute('muted', '');
+        video.muted = true;
         video.play();
 
         video.onloadedmetadata = () => {
-          // 创建视频纹理作为背景
           videoTexture = new THREE.VideoTexture(video);
           videoTexture.minFilter = THREE.LinearFilter;
           videoTexture.magFilter = THREE.LinearFilter;
           scene.background = videoTexture;
         };
 
-        // 设置音频分析
-        setupAudio(stream);
+        // 单独获取音频流
+        const audioStream = await navigator.mediaDevices.getUserMedia({
+          video: false,
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+
+        setupAudio(audioStream);
         
       } catch (error) {
         console.error('无法访问摄像头或麦克风:', error);
         document.getElementById('info').textContent = '请允许摄像头和麦克风权限';
-        
-        // 设置默认背景色
-        scene.background = new THREE.Color(0x87CEEB); // 天蓝色
+        scene.background = new THREE.Color(0x87CEEB);
       }
     }
 
     function setupAudio(stream) {
-      // 创建音频上下文
       audioContext = new (window.AudioContext || window.webkitAudioContext)();
       
-      // 创建音频源
       const source = audioContext.createMediaStreamSource(stream);
       
-      // 创建分析器
       analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
       analyser.smoothingTimeConstant = 0.3;
       
-      // 只连接到分析器，不连接到扬声器（避免回音）
       source.connect(analyser);
-      // 重要：不要连接到 audioContext.destination
       
-      // 创建数据数组
       audioData = new Uint8Array(analyser.frequencyBinCount);
       
       isAudioReady = true;
-      
-      // 处理iOS的音频限制
-      document.addEventListener('touchstart', () => {
-        if (audioContext.state === 'suspended') {
-          audioContext.resume();
-        }
-      }, { once: true });
     }
 
     function onWindowResize() {
@@ -151,18 +261,22 @@
     }
 
     function createBalloon() {
-      // 随机位置和大小
-      const x = (Math.random() - 0.5) * 10;
-      const z = -2 - Math.random() * 3;
+      // 在世界空间中随机位置（相对于当前视角）
+      const distance = 3 + Math.random() * 5; // 3-8米远
+      const angleH = (Math.random() - 0.5) * Math.PI * 0.6; // 水平角度
+      const angleV = (Math.random() - 0.5) * Math.PI * 0.3; // 垂直角度
+      
+      // 计算世界坐标位置
+      const x = distance * Math.sin(angleH);
+      const y = -2 + Math.random() * 1; // 从地面附近开始
+      const z = -distance * Math.cos(angleH);
+      
       const scale = 0.5 + Math.random() * 1;
       
-      // 检查是否与现有气球重叠
+      // 检查重叠
       let overlapping = false;
       for (const balloon of balloons) {
-        const distance = Math.sqrt(
-          Math.pow(balloon.position.x - x, 2) + 
-          Math.pow(balloon.position.z - z, 2)
-        );
+        const distance = balloon.position.distanceTo(new THREE.Vector3(x, y, z));
         if (distance < scale + balloon.userData.scale) {
           overlapping = true;
           break;
@@ -174,37 +288,40 @@
       // 创建气球组
       const balloonGroup = new THREE.Group();
       
-      // 气球主体（球体）
+      // 气球主体
       const balloonGeometry = new THREE.SphereGeometry(0.5, 32, 16);
       const balloonMaterial = new THREE.MeshPhongMaterial({
-        color: 0xff0000, // 红色
+        color: 0xff0000,
         shininess: 100,
         specular: 0xffffff
       });
       const balloonMesh = new THREE.Mesh(balloonGeometry, balloonMaterial);
-      balloonMesh.scale.y = 1.2; // 稍微拉长使其更像气球
+      balloonMesh.scale.y = 1.2;
       balloonGroup.add(balloonMesh);
       
-      // 气球绳子
+      // 绳子
       const ropeGeometry = new THREE.CylinderGeometry(0.01, 0.01, 1.5, 8);
       const ropeMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
       const ropeMesh = new THREE.Mesh(ropeGeometry, ropeMaterial);
       ropeMesh.position.y = -1;
       balloonGroup.add(ropeMesh);
       
-      // 设置位置和缩放
-      balloonGroup.position.set(x, -5, z);
+      // 设置在世界空间中的位置
+      balloonGroup.position.set(x, y, z);
       balloonGroup.scale.set(scale, scale, scale);
       
-      // 添加用户数据
+      // 保存初始世界位置，用于物理模拟
       balloonGroup.userData = {
         speed: 0.01 + Math.random() * 0.02,
         swaySpeed: 1 + Math.random() * 2,
         swayAmount: 0.1 + Math.random() * 0.2,
-        scale: scale
+        scale: scale,
+        worldPosition: new THREE.Vector3(x, y, z),
+        initialY: y
       };
       
-      scene.add(balloonGroup);
+      // 添加到世界容器而不是场景
+      worldContainer.add(balloonGroup);
       balloons.push(balloonGroup);
     }
 
@@ -214,19 +331,29 @@
       for (let i = balloons.length - 1; i >= 0; i--) {
         const balloon = balloons[i];
         
-        // 上升
-        balloon.position.y += balloon.userData.speed;
+        // 在世界空间中上升
+        balloon.userData.worldPosition.y += balloon.userData.speed;
         
-        // 左右摇摆
-        balloon.position.x += Math.sin(time * balloon.userData.swaySpeed) * 
-                             balloon.userData.swayAmount * 0.01;
+        // 计算摇摆（在世界空间中）
+        const swayX = Math.sin(time * balloon.userData.swaySpeed) * 
+                     balloon.userData.swayAmount;
+        const swayZ = Math.cos(time * balloon.userData.swaySpeed * 0.7) * 
+                     balloon.userData.swayAmount * 0.5;
+        
+        // 更新气球位置
+        balloon.position.set(
+          balloon.userData.worldPosition.x + swayX,
+          balloon.userData.worldPosition.y,
+          balloon.userData.worldPosition.z + swayZ
+        );
         
         // 轻微旋转
         balloon.rotation.z = Math.sin(time * balloon.userData.swaySpeed) * 0.1;
+        balloon.rotation.x = Math.cos(time * balloon.userData.swaySpeed * 0.8) * 0.05;
         
-        // 移除飞出屏幕的气球
-        if (balloon.position.y > 10) {
-          scene.remove(balloon);
+        // 移除飞得太高的气球
+        if (balloon.userData.worldPosition.y > 10) {
+          worldContainer.remove(balloon);
           balloons.splice(i, 1);
         }
       }
@@ -235,30 +362,29 @@
     function checkAudioLevel() {
       if (!isAudioReady || !analyser) return;
       
-      // 获取音频数据
       analyser.getByteFrequencyData(audioData);
       
-      // 计算平均音量
       let sum = 0;
       for (let i = 0; i < audioData.length; i++) {
         sum += audioData[i];
       }
       const average = sum / audioData.length;
       
-      // 如果音量超过阈值，创建气球（提高阈值避免环境噪音）
       if (average > 40 && balloons.length < 20) {
         createBalloon();
         
-        // 添加冷却时间，避免一次触发太多气球
         isAudioReady = false;
         setTimeout(() => {
           isAudioReady = true;
-        }, 200); // 200ms 冷却时间
+        }, 200);
       }
     }
 
     function animate() {
       requestAnimationFrame(animate);
+      
+      // 更新相机旋转（基于陀螺仪）
+      updateCameraRotation();
       
       // 检查音频触发
       checkAudioLevel();
@@ -270,9 +396,10 @@
       renderer.render(scene, camera);
     }
 
-    // 添加点击事件作为备用触发方式
-    document.addEventListener('click', () => {
-      if (balloons.length < 20) {
+    // 点击备用触发
+    document.addEventListener('click', (e) => {
+      // 避免点击按钮时触发
+      if (e.target.id !== 'permission-btn' && balloons.length < 20) {
         createBalloon();
       }
     });
