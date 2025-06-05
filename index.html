@@ -42,7 +42,7 @@
 </head>
 <body>
   <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 ARA 体验</button>
+  <button id="permission-btn" style="display: none;">点击启动 ARD 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -296,16 +296,20 @@
       const balloonGeometry = new THREE.SphereGeometry(0.5, 32, 16);
       const balloonMaterial = new THREE.MeshPhongMaterial({
         color: 0xff0000,
-        shininess: 100,
-        specular: 0xffffff
+        shininess: 5,  // 大幅降低光泽度（原来是100）
+        specular: 0x220000  // 暗红色高光，更哑光的效果
       });
       const balloonMesh = new THREE.Mesh(balloonGeometry, balloonMaterial);
       balloonMesh.scale.y = 1.2;
       balloonGroup.add(balloonMesh);
       
       // 绳子
-      const ropeGeometry = new THREE.CylinderGeometry(0.01, 0.01, 1.5, 8);
-      const ropeMaterial = new THREE.MeshBasicMaterial({ color: 0x333333 });
+      const ropeGeometry = new THREE.CylinderGeometry(0.003, 0.003, 1.2, 4); // 更细的绳子
+      const ropeMaterial = new THREE.MeshBasicMaterial({ 
+        color: 0x666666,  // 更浅的灰色
+        transparent: true,
+        opacity: 0.5  // 半透明
+      });
       const ropeMesh = new THREE.Mesh(ropeGeometry, ropeMaterial);
       ropeMesh.position.y = -1;
       balloonGroup.add(ropeMesh);
