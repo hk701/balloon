@@ -87,10 +87,12 @@
           audio: true
         });
 
-        // 设置视频流
+        // 设置视频流（静音，避免回音）
         video = document.createElement('video');
         video.srcObject = stream;
         video.setAttribute('playsinline', '');
+        video.setAttribute('muted', ''); // 确保视频静音
+        video.muted = true; // 双重保证静音
         video.play();
 
         video.onloadedmetadata = () => {
@@ -125,8 +127,9 @@
       analyser.fftSize = 256;
       analyser.smoothingTimeConstant = 0.3;
       
-      // 连接节点
+      // 只连接到分析器，不连接到扬声器（避免回音）
       source.connect(analyser);
+      // 重要：不要连接到 audioContext.destination
       
       // 创建数据数组
       audioData = new Uint8Array(analyser.frequencyBinCount);
@@ -242,9 +245,15 @@
       }
       const average = sum / audioData.length;
       
-      // 如果音量超过阈值，创建气球
-      if (average > 30 && balloons.length < 20) {
+      // 如果音量超过阈值，创建气球（提高阈值避免环境噪音）
+      if (average > 40 && balloons.length < 20) {
         createBalloon();
+        
+        // 添加冷却时间，避免一次触发太多气球
+        isAudioReady = false;
+        setTimeout(() => {
+          isAudioReady = true;
+        }, 200); // 200ms 冷却时间
       }
     }
 
