@@ -42,7 +42,7 @@
 </head>
 <body>
   <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 ARB 体验</button>
+  <button id="permission-btn" style="display: none;">点击启动 ARC 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -58,6 +58,7 @@
     let deviceOrientation = { alpha: 0, beta: 0, gamma: 0 };
     let initialOrientation = null;
     let hasGyroscope = false;
+    let calibrationFrames = 0;
     
     // 世界空间容器（用于固定气球在世界坐标中）
     let worldContainer;
@@ -157,9 +158,10 @@
           gamma: event.gamma
         };
         
-        // 记录初始方向
-        if (!initialOrientation) {
+        // 记录初始方向（等待几帧以获得稳定值）
+        if (!initialOrientation && calibrationFrames++ > 10) {
           initialOrientation = { ...deviceOrientation };
+          console.log('初始方向已校准');
         }
         
         hasGyroscope = true;
@@ -169,27 +171,36 @@
     function updateCameraRotation() {
       if (!hasGyroscope) return;
       
+      // 只使用水平旋转（方位角），忽略设备倾斜
+      // alpha: 设备绕 Z 轴旋转（方位角 - 左右转动）
+      // beta: 设备绕 X 轴旋转（俯仰角 - 前后倾斜）- 限制使用
+      // gamma: 设备绕 Y 轴旋转（翻滚角 - 左右倾斜）- 限制使用
+      
       // 计算相对于初始方向的旋转
       const alpha = initialOrientation ? 
         (deviceOrientation.alpha - initialOrientation.alpha) : deviceOrientation.alpha;
       
-      // 将设备方向转换为相机旋转
-      // alpha: 设备绕 Z 轴旋转（方位角）
-      // beta: 设备绕 X 轴旋转（俯仰角）
-      // gamma: 设备绕 Y 轴旋转（翻滚角）
-      
+      // 将角度转换为弧度
       const alphaRad = THREE.MathUtils.degToRad(alpha);
-      const betaRad = THREE.MathUtils.degToRad(deviceOrientation.beta - 90);
-      const gammaRad = THREE.MathUtils.degToRad(deviceOrientation.gamma);
       
-      // 创建旋转矩阵
-      const rotationMatrix = new THREE.Matrix4();
-      rotationMatrix.makeRotationFromEuler(
-        new THREE.Euler(betaRad, alphaRad, gammaRad, 'YXZ')
-      );
+      // 限制俯仰角的影响（只取一小部分）
+      const betaRad = THREE.MathUtils.degToRad(deviceOrientation.beta - 90) * 0.3;
       
-      // 应用反向旋转到世界容器，这样气球会保持在世界坐标中
-      worldContainer.rotation.setFromRotationMatrix(rotationMatrix.invert());
+      // 几乎忽略翻滚角
+      const gammaRad = THREE.MathUtils.degToRad(deviceOrientation.gamma) * 0.1;
+      
+      // 平滑过渡
+      const smoothingFactor = 0.1;
+      
+      // 只应用Y轴旋转（水平旋转）为主
+      const targetRotationY = -alphaRad;
+      const targetRotationX = -betaRad * 0.5; // 轻微的上下视角变化
+      const targetRotationZ = -gammaRad * 0.3; // 极小的倾斜补偿
+      
+      // 平滑插值到目标旋转
+      worldContainer.rotation.y += (targetRotationY - worldContainer.rotation.y) * smoothingFactor;
+      worldContainer.rotation.x += (targetRotationX - worldContainer.rotation.x) * smoothingFactor;
+      worldContainer.rotation.z += (targetRotationZ - worldContainer.rotation.z) * smoothingFactor;
     }
 
     async function initCameraAndAudio() {
@@ -262,16 +273,16 @@
 
     function createBalloon() {
       // 在世界空间中随机位置（相对于当前视角）
-      const distance = 5 + Math.random() * 10; // 5-15米远，更远的距离
+      const distance = 5 + Math.random() * 10; // 5-15米远
       const angleH = (Math.random() - 0.5) * Math.PI * 0.8; // 更宽的水平角度
       const angleV = (Math.random() - 0.5) * Math.PI * 0.4; // 更宽的垂直角度
       
       // 计算世界坐标位置
       const x = distance * Math.sin(angleH) * Math.cos(angleV);
-      const y = -3 + Math.random() * 2 + distance * Math.sin(angleV) * 0.1; // 从更低的地方开始
+      const y = -3 + Math.random() * 2 + distance * Math.sin(angleV) * 0.3; // 从更低处开始，考虑垂直角度
       const z = -distance * Math.cos(angleH) * Math.cos(angleV);
       
-      const scale = 0.5 + Math.random() * 1;
+      const scale = 0.4 + Math.random() * 1.2; // 更多大小变化
       
       // 检查重叠
       let overlapping = false;
@@ -313,13 +324,13 @@
       // 保存初始世界位置，用于物理模拟
       balloonGroup.userData = {
         speed: 0.008 + Math.random() * 0.015, // 稍慢的上升速度
-        swaySpeed: 0.5 + Math.random() * 1.5, // 更缓慢的摇摆
-        swayAmount: 0.2 + Math.random() * 0.3, // 更大的摇摆幅度
+        swaySpeed: 0.5 + Math.random() * 1.5, // 更自然的摇摆速度
+        swayAmount: 0.15 + Math.random() * 0.3, // 增加摇摆幅度
         scale: scale,
         worldPosition: new THREE.Vector3(x, y, z),
         initialY: y,
-        rotationSpeed: (Math.random() - 0.5) * 0.5, // 随机旋转速度
-        verticalSwayPhase: Math.random() * Math.PI * 2 // 垂直摇摆相位
+        windPhase: Math.random() * Math.PI * 2, // 随机风相位
+        rotationSpeed: (Math.random() - 0.5) * 0.5 // 随机旋转速度
       };
       
       // 添加到世界容器而不是场景
@@ -333,33 +344,34 @@
       for (let i = balloons.length - 1; i >= 0; i--) {
         const balloon = balloons[i];
         
-        // 在世界空间中上升（添加轻微的加速度效果）
-        const heightFactor = 1 + (balloon.userData.worldPosition.y - balloon.userData.initialY) * 0.02;
-        balloon.userData.worldPosition.y += balloon.userData.speed * heightFactor;
+        // 在世界空间中上升（带轻微加速）
+        balloon.userData.speed *= 1.001; // 轻微加速效果
+        balloon.userData.worldPosition.y += balloon.userData.speed;
         
         // 更自然的摇摆（结合多个正弦波）
-        const swayX = Math.sin(time * balloon.userData.swaySpeed) * balloon.userData.swayAmount +
-                     Math.sin(time * balloon.userData.swaySpeed * 2.1) * balloon.userData.swayAmount * 0.3;
-        const swayZ = Math.cos(time * balloon.userData.swaySpeed * 0.7) * balloon.userData.swayAmount * 0.5 +
-                     Math.cos(time * balloon.userData.swaySpeed * 1.3) * balloon.userData.swayAmount * 0.2;
+        const windEffect = Math.sin(time * 0.3 + balloon.userData.windPhase) * 0.5 + 0.5;
+        const swayX = Math.sin(time * balloon.userData.swaySpeed + balloon.userData.windPhase) * 
+                     balloon.userData.swayAmount * (1 + windEffect);
+        const swayZ = Math.cos(time * balloon.userData.swaySpeed * 0.7 + balloon.userData.windPhase) * 
+                     balloon.userData.swayAmount * 0.6 * (1 + windEffect);
         
-        // 添加垂直方向的轻微浮动
-        const swayY = Math.sin(time * balloon.userData.swaySpeed * 0.5 + balloon.userData.verticalSwayPhase) * 0.05;
+        // 高度影响摇摆（越高摇摆越大）
+        const heightFactor = 1 + (balloon.userData.worldPosition.y - balloon.userData.initialY) * 0.05;
         
         // 更新气球位置
         balloon.position.set(
-          balloon.userData.worldPosition.x + swayX,
-          balloon.userData.worldPosition.y + swayY,
-          balloon.userData.worldPosition.z + swayZ
+          balloon.userData.worldPosition.x + swayX * heightFactor,
+          balloon.userData.worldPosition.y,
+          balloon.userData.worldPosition.z + swayZ * heightFactor
         );
         
         // 更自然的旋转
-        balloon.rotation.z = Math.sin(time * balloon.userData.swaySpeed) * 0.15;
-        balloon.rotation.x = Math.cos(time * balloon.userData.swaySpeed * 0.8) * 0.08;
+        balloon.rotation.z = Math.sin(time * balloon.userData.swaySpeed * 0.8) * 0.15;
+        balloon.rotation.x = Math.cos(time * balloon.userData.swaySpeed * 0.6) * 0.1;
         balloon.rotation.y += balloon.userData.rotationSpeed * 0.01;
         
         // 移除飞得太高的气球
-        if (balloon.userData.worldPosition.y > 15) {
+        if (balloon.userData.worldPosition.y > 20) {
           worldContainer.remove(balloon);
           balloons.splice(i, 1);
         }
@@ -380,18 +392,11 @@
       if (average > 25 && balloons.length < 30) {
         createBalloon();
         
-        // 声音越大，生成越多气球（最多3个）
-        const extraBalloons = Math.floor((average - 25) / 20);
-        for (let i = 0; i < Math.min(extraBalloons, 2); i++) {
-          setTimeout(() => {
-            if (balloons.length < 30) createBalloon();
-          }, (i + 1) * 100);
-        }
-        
+        // 更短的冷却时间，更灵敏
         isAudioReady = false;
         setTimeout(() => {
           isAudioReady = true;
-        }, 150); // 减少冷却时间
+        }, 100); // 减少到100ms
       }
     }
 
