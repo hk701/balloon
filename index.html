@@ -41,8 +41,7 @@
   </style>
 </head>
 <body>
-  <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 AR5 体验</button>
+  <button id="permission-btn" style="display: none;">点击启动 AR6 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -55,8 +54,8 @@
     let isAudioReady = false;
     
     // ========== 全局可调参数 ==========
-    const MAX_BALLOONS = 40;        // 最大气球数量
-    const AUDIO_THRESHOLD = 5;     // 声音触发阈值
+    const MAX_BALLOONS = 30;        // 最大气球数量
+    const AUDIO_THRESHOLD = 25;     // 声音触发阈值
     const AUDIO_COOLDOWN = 100;     // 声音触发冷却时间(ms)
     // ==================================
     
@@ -65,6 +64,7 @@
     let initialOrientation = null;
     let hasGyroscope = false;
     let calibrationFrames = 0;
+    let lastValidAlpha = 0;  // 记录上一次有效的alpha值
     
     // 世界空间容器（用于固定气球在世界坐标中）
     let worldContainer;
@@ -186,12 +186,34 @@
       const tiltFactor = 0.3;        // 俯仰影响系数
       // ==============================
       
-      // 计算水平旋转
-      let deltaAlpha = deviceOrientation.alpha - initialOrientation.alpha;
+      // 当设备接近垂直时，alpha值会不稳定
+      // 使用beta角度来检测是否接近垂直
+      const isNearVertical = Math.abs(deviceOrientation.beta) < 20 || 
+                            Math.abs(deviceOrientation.beta) > 160;
       
-      // 处理360度边界
-      if (deltaAlpha > 180) deltaAlpha -= 360;
-      if (deltaAlpha < -180) deltaAlpha += 360;
+      let deltaAlpha;
+      
+      if (isNearVertical) {
+        // 接近垂直时，使用上一次的有效值，避免突变
+        deltaAlpha = lastValidAlpha;
+      } else {
+        // 正常情况下计算旋转
+        deltaAlpha = deviceOrientation.alpha - initialOrientation.alpha;
+        
+        // 处理360度边界
+        if (deltaAlpha > 180) deltaAlpha -= 360;
+        if (deltaAlpha < -180) deltaAlpha += 360;
+        
+        // 检测突变（如果变化超过90度，可能是异常）
+        const alphaDiff = Math.abs(deltaAlpha - lastValidAlpha);
+        if (alphaDiff > 90 && alphaDiff < 270) {
+          // 发生突变，使用插值而不是直接跳转
+          deltaAlpha = lastValidAlpha + (deltaAlpha - lastValidAlpha) * 0.1;
+        }
+        
+        // 更新最后有效值
+        lastValidAlpha = deltaAlpha;
+      }
       
       // 应用死区
       if (Math.abs(deltaAlpha) < deadZone) deltaAlpha = 0;
@@ -206,7 +228,7 @@
       worldContainer.rotation.y += (targetRotationY - worldContainer.rotation.y) * smoothingFactor;
       
       // 处理俯仰（可选）
-      if (enableTilt) {
+      if (enableTilt && !isNearVertical) {
         let deltaBeta = deviceOrientation.beta - initialOrientation.beta;
         deltaBeta = Math.max(-tiltLimit, Math.min(tiltLimit, deltaBeta));
         const targetRotationX = -THREE.MathUtils.degToRad(deltaBeta) * tiltFactor;
