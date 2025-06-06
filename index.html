@@ -42,7 +42,7 @@
 </head>
 <body>
   <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 AR11 体验</button>
+  <button id="permission-btn" style="display: none;">点击启动 AR39 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -55,7 +55,7 @@
     let isAudioReady = false;
     
     // ========== 全局可调参数 ==========
-    const MAX_BALLOONS = 60;        // 最大气球数量
+    const MAX_BALLOONS = 80;        // 最大气球数量
     const AUDIO_THRESHOLD = 5;     // 声音触发阈值
     const AUDIO_COOLDOWN = 100;     // 声音触发冷却时间(ms)
     // ==================================
@@ -65,8 +65,8 @@
     let initialOrientation = null;
     let hasGyroscope = false;
     let calibrationFrames = 0;
-    let rotationMatrix = new THREE.Matrix4();  // 使用旋转矩阵
-    let initialMatrix = new THREE.Matrix4();    // 初始旋转矩阵
+    let currentRotationY = 0;  // 当前实际的Y轴旋转
+    let lastUpdateTime = Date.now();  // 上次更新时间
     
     // 世界空间容器（用于固定气球在世界坐标中）
     let worldContainer;
@@ -169,69 +169,75 @@
         // 记录初始方向（等待几帧以获得稳定值）
         if (!initialOrientation && calibrationFrames++ > 10) {
           initialOrientation = { ...deviceOrientation };
-          // 计算初始旋转矩阵
-          computeRotationMatrix(initialOrientation.alpha, initialOrientation.beta, initialOrientation.gamma, initialMatrix);
           console.log('初始方向已校准');
         }
         
         hasGyroscope = true;
       }
     }
-    
-    // 将欧拉角转换为旋转矩阵（避免万向节锁）
-    function computeRotationMatrix(alpha, beta, gamma, matrix) {
-      // 转换为弧度
-      const a = THREE.MathUtils.degToRad(alpha);
-      const b = THREE.MathUtils.degToRad(beta);
-      const g = THREE.MathUtils.degToRad(gamma);
-      
-      // 计算各轴的正弦余弦值
-      const ca = Math.cos(a);
-      const sa = Math.sin(a);
-      const cb = Math.cos(b);
-      const sb = Math.sin(b);
-      const cg = Math.cos(g);
-      const sg = Math.sin(g);
-      
-      // 构建旋转矩阵（ZXY顺序，与设备方向API一致）
-      // 这是W3C设备方向规范中定义的旋转顺序
-      matrix.set(
-        ca * cb - sa * sg * sb,    -sa * cg,    ca * sb + sa * sg * cb,    0,
-        sa * cb + ca * sg * sb,     ca * cg,    sa * sb - ca * sg * cb,    0,
-        -cg * sb,                   sg,         cg * cb,                   0,
-        0,                          0,          0,                         1
-      );
-    }
 
     function updateCameraRotation() {
       if (!hasGyroscope || !initialOrientation) return;
       
       // ========== 可调参数 ==========
-      const smoothingFactor = 0.1;      // 平滑度
+      const smoothingFactor = 0.1;      // 基础平滑度
+      const maxRotationSpeed = 2;       // 最大旋转速度（度/帧）
+      const verticalDamping = 5;        // 竖直时的阻尼系数
       // ==============================
       
-      // 计算当前设备的旋转矩阵
-      computeRotationMatrix(deviceOrientation.alpha, deviceOrientation.beta, deviceOrientation.gamma, rotationMatrix);
+      // 获取当前时间
+      const currentTime = Date.now();
+      const deltaTime = Math.min((currentTime - lastUpdateTime) / 16.67, 2); // 归一化到60fps
+      lastUpdateTime = currentTime;
       
-      // 计算相对旋转：当前旋转矩阵 * 初始旋转矩阵的逆
-      const relativeMatrix = new THREE.Matrix4();
-      const inverseInitial = initialMatrix.clone().invert();
-      relativeMatrix.multiplyMatrices(rotationMatrix, inverseInitial);
+      // 获取当前角度
+      const beta = deviceOrientation.beta;
+      const alpha = deviceOrientation.alpha;
       
-      // 从旋转矩阵中提取旋转
-      const rotation = new THREE.Euler();
-      rotation.setFromRotationMatrix(relativeMatrix, 'YXZ');
+      // 计算目标旋转
+      let deltaAlpha = alpha - initialOrientation.alpha;
       
-      // 只使用Y轴旋转（水平旋转）
-      const targetRotation = new THREE.Euler(0, -rotation.y, 0);
+      // 处理360度边界
+      if (deltaAlpha > 180) deltaAlpha -= 360;
+      if (deltaAlpha < -180) deltaAlpha += 360;
       
-      // 使用四元数进行平滑插值（避免欧拉角的问题）
-      const currentQuaternion = worldContainer.quaternion.clone();
-      const targetQuaternion = new THREE.Quaternion().setFromEuler(targetRotation);
+      // 转换为弧度
+      const targetRotationY = -THREE.MathUtils.degToRad(deltaAlpha);
       
-      // 球面线性插值（SLERP）
-      currentQuaternion.slerp(targetQuaternion, smoothingFactor);
-      worldContainer.quaternion.copy(currentQuaternion);
+      // 计算与当前旋转的差异
+      let rotationDiff = targetRotationY - currentRotationY;
+      
+      // 确保差异在-PI到PI之间
+      if (rotationDiff > Math.PI) rotationDiff -= Math.PI * 2;
+      if (rotationDiff < -Math.PI) rotationDiff += Math.PI * 2;
+      
+      // 计算竖直程度（0-1，1表示完全竖直）
+      const verticalness = Math.abs(beta - 90) < 30 ? 1 - Math.abs(beta - 90) / 30 : 0;
+      
+      // 根据竖直程度调整平滑因子和速度限制
+      const adaptiveSmoothing = smoothingFactor * (1 - verticalness * 0.9); // 越竖直越慢
+      const adaptiveSpeedLimit = maxRotationSpeed * (1 - verticalness * 0.8); // 越竖直速度越慢
+      
+      // 限制旋转速度
+      const maxRotationRad = THREE.MathUtils.degToRad(adaptiveSpeedLimit * deltaTime);
+      rotationDiff = THREE.MathUtils.clamp(rotationDiff, -maxRotationRad, maxRotationRad);
+      
+      // 应用额外的阻尼
+      if (verticalness > 0) {
+        rotationDiff *= (1 - verticalness * 0.5);
+      }
+      
+      // 应用旋转
+      currentRotationY += rotationDiff * adaptiveSmoothing;
+      
+      // 确保旋转值在合理范围内
+      if (currentRotationY > Math.PI) currentRotationY -= Math.PI * 2;
+      if (currentRotationY < -Math.PI) currentRotationY += Math.PI * 2;
+      
+      // 更新世界容器
+      worldContainer.rotation.y = currentRotationY;
+      worldContainer.rotation.x = 0;
+      worldContainer.rotation.z = 0;
     }
 
     async function initCameraAndAudio() {
