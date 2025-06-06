@@ -41,8 +41,8 @@
   </style>
 </head>
 <body>
-  <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 AR39 体验</button>
+
+  <button id="permission-btn" style="display: none;">点击启动 AR39-2 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -339,7 +339,7 @@
       // 气球主体
       const balloonGeometry = new THREE.SphereGeometry(0.5, 32, 16);
       const balloonMaterial = new THREE.MeshPhongMaterial({
-        color: 0xff0000,
+        color: 0xE4002B,
         shininess: 5,  // 大幅降低光泽度（原来是100）
         specular: 0x220000  // 暗红色高光，更哑光的效果
       });
