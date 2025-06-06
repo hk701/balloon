@@ -42,7 +42,7 @@
 </head>
 <body>
   <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 ARv3 体验</button>
+  <button id="permission-btn" style="display: none;">点击启动 ARv4 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -65,8 +65,8 @@
     let initialOrientation = null;
     let hasGyroscope = false;
     let calibrationFrames = 0;
-    let lastStableRotation = 0;  // 记录最后一次稳定的旋转值
-    let isInDeadZone = false;    // 是否在死区内
+    let rotationHistory = [];  // 存储最近的旋转值历史
+    let lastRawAlpha = null;   // 上一帧的原始alpha值
     
     // 世界空间容器（用于固定气球在世界坐标中）
     let worldContainer;
@@ -180,50 +180,49 @@
       if (!hasGyroscope || !initialOrientation) return;
       
       // ========== 可调参数 ==========
-      const smoothingFactor = 0.15;     // 平滑度：0.01-1.0
-      const verticalDeadZone = 70;      // 垂直死区范围（70-110度为死区）
-      const transitionZone = 10;        // 过渡区域大小
+      const smoothingFactor = 0.15;     // 平滑度
+      const enableGyroscope = true;     // 是否启用陀螺仪
+      const betaLimit = 45;            // Beta角度限制（度）
       // ==============================
       
-      // 获取当前的beta角度
-      const beta = deviceOrientation.beta;
-      
-      // 定义死区：当手机接近垂直时（beta在70-110度之间）
-      const inDeadZone = beta > verticalDeadZone && beta < (180 - verticalDeadZone);
-      const nearDeadZone = (beta > verticalDeadZone - transitionZone && beta < verticalDeadZone) ||
-                          (beta > (180 - verticalDeadZone) && beta < (180 - verticalDeadZone + transitionZone));
-      
-      // 如果刚进入死区，保存当前旋转
-      if (inDeadZone && !isInDeadZone) {
-        lastStableRotation = worldContainer.rotation.y;
-        isInDeadZone = true;
-      } else if (!inDeadZone && isInDeadZone) {
-        // 离开死区
-        isInDeadZone = false;
-      }
-      
-      if (inDeadZone) {
-        // 在死区内，保持最后的旋转不变
-        worldContainer.rotation.y = lastStableRotation;
+      // 如果禁用陀螺仪，直接返回
+      if (!enableGyroscope) {
+        worldContainer.rotation.set(0, 0, 0);
         return;
       }
       
-      // 计算目标旋转
+      // 获取当前beta角度
+      const beta = deviceOrientation.beta;
+      
+      // 只在手机相对水平时（beta在45-135度之间）启用陀螺仪
+      if (beta < betaLimit || beta > (180 - betaLimit)) {
+        // 手机太倾斜，不更新旋转
+        return;
+      }
+      
+      // 正常计算旋转
       let deltaAlpha = deviceOrientation.alpha - initialOrientation.alpha;
       
       // 处理360度边界
       if (deltaAlpha > 180) deltaAlpha -= 360;
       if (deltaAlpha < -180) deltaAlpha += 360;
       
+      // 添加额外的平滑处理
       const targetRotationY = -THREE.MathUtils.degToRad(deltaAlpha);
       
-      // 如果在过渡区，使用更慢的平滑速度
-      const currentSmoothing = nearDeadZone ? smoothingFactor * 0.3 : smoothingFactor;
+      // 计算当前旋转和目标旋转的差异
+      let rotationDiff = targetRotationY - worldContainer.rotation.y;
       
-      // 平滑过渡
-      if (!isInDeadZone) {
-        worldContainer.rotation.y += (targetRotationY - worldContainer.rotation.y) * currentSmoothing;
-      }
+      // 确保差异在-PI到PI之间
+      if (rotationDiff > Math.PI) rotationDiff -= Math.PI * 2;
+      if (rotationDiff < -Math.PI) rotationDiff += Math.PI * 2;
+      
+      // 应用平滑旋转
+      worldContainer.rotation.y += rotationDiff * smoothingFactor;
+      
+      // 确保Y旋转在合理范围内
+      if (worldContainer.rotation.y > Math.PI) worldContainer.rotation.y -= Math.PI * 2;
+      if (worldContainer.rotation.y < -Math.PI) worldContainer.rotation.y += Math.PI * 2;
       
       // 保持其他轴为0
       worldContainer.rotation.x = 0;
