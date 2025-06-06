@@ -42,7 +42,7 @@
 </head>
 <body>
   <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 AR9 体验</button>
+  <button id="permission-btn" style="display: none;">点击启动 AR11 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -65,8 +65,8 @@
     let initialOrientation = null;
     let hasGyroscope = false;
     let calibrationFrames = 0;
-    let currentQuaternion = new THREE.Quaternion();
-    let targetQuaternion = new THREE.Quaternion();
+    let rotationMatrix = new THREE.Matrix4();  // 使用旋转矩阵
+    let initialMatrix = new THREE.Matrix4();    // 初始旋转矩阵
     
     // 世界空间容器（用于固定气球在世界坐标中）
     let worldContainer;
@@ -169,51 +169,68 @@
         // 记录初始方向（等待几帧以获得稳定值）
         if (!initialOrientation && calibrationFrames++ > 10) {
           initialOrientation = { ...deviceOrientation };
+          // 计算初始旋转矩阵
+          computeRotationMatrix(initialOrientation.alpha, initialOrientation.beta, initialOrientation.gamma, initialMatrix);
           console.log('初始方向已校准');
         }
         
         hasGyroscope = true;
       }
     }
+    
+    // 将欧拉角转换为旋转矩阵（避免万向节锁）
+    function computeRotationMatrix(alpha, beta, gamma, matrix) {
+      // 转换为弧度
+      const a = THREE.MathUtils.degToRad(alpha);
+      const b = THREE.MathUtils.degToRad(beta);
+      const g = THREE.MathUtils.degToRad(gamma);
+      
+      // 计算各轴的正弦余弦值
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      const cb = Math.cos(b);
+      const sb = Math.sin(b);
+      const cg = Math.cos(g);
+      const sg = Math.sin(g);
+      
+      // 构建旋转矩阵（ZXY顺序，与设备方向API一致）
+      // 这是W3C设备方向规范中定义的旋转顺序
+      matrix.set(
+        ca * cb - sa * sg * sb,    -sa * cg,    ca * sb + sa * sg * cb,    0,
+        sa * cb + ca * sg * sb,     ca * cg,    sa * sb - ca * sg * cb,    0,
+        -cg * sb,                   sg,         cg * cb,                   0,
+        0,                          0,          0,                         1
+      );
+    }
 
     function updateCameraRotation() {
       if (!hasGyroscope || !initialOrientation) return;
       
       // ========== 可调参数 ==========
-      const smoothingFactor = 0.15;  // 平滑度：0.01-1.0
-      const verticalLockThreshold = 30; // 垂直锁定阈值（度）
+      const smoothingFactor = 0.1;      // 平滑度
       // ==============================
       
-      // 获取设备的beta角度（-180到180）
-      const beta = deviceOrientation.beta;
+      // 计算当前设备的旋转矩阵
+      computeRotationMatrix(deviceOrientation.alpha, deviceOrientation.beta, deviceOrientation.gamma, rotationMatrix);
       
-      // 检测是否接近垂直（朝上或朝下）
-      const isNearVertical = (beta > -verticalLockThreshold && beta < verticalLockThreshold) || 
-                            (beta > 180 - verticalLockThreshold || beta < -180 + verticalLockThreshold);
+      // 计算相对旋转：当前旋转矩阵 * 初始旋转矩阵的逆
+      const relativeMatrix = new THREE.Matrix4();
+      const inverseInitial = initialMatrix.clone().invert();
+      relativeMatrix.multiplyMatrices(rotationMatrix, inverseInitial);
       
-      if (isNearVertical) {
-        // 接近垂直时，只保持当前旋转，不更新
-        return;
-      }
+      // 从旋转矩阵中提取旋转
+      const rotation = new THREE.Euler();
+      rotation.setFromRotationMatrix(relativeMatrix, 'YXZ');
       
-      // 计算相对旋转（只在非垂直状态下）
-      let deltaAlpha = deviceOrientation.alpha - initialOrientation.alpha;
+      // 只使用Y轴旋转（水平旋转）
+      const targetRotation = new THREE.Euler(0, -rotation.y, 0);
       
-      // 使用正弦和余弦来避免360度跳变
-      const alphaRad = THREE.MathUtils.degToRad(deltaAlpha);
-      const x = Math.sin(alphaRad);
-      const z = Math.cos(alphaRad);
+      // 使用四元数进行平滑插值（避免欧拉角的问题）
+      const currentQuaternion = worldContainer.quaternion.clone();
+      const targetQuaternion = new THREE.Quaternion().setFromEuler(targetRotation);
       
-      // 从正弦余弦重建角度，这样可以平滑处理边界
-      const smoothedAlpha = Math.atan2(x, z);
-      
-      // 创建目标四元数（只绕Y轴旋转）
-      targetQuaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -smoothedAlpha);
-      
-      // 平滑插值当前四元数到目标四元数
+      // 球面线性插值（SLERP）
       currentQuaternion.slerp(targetQuaternion, smoothingFactor);
-      
-      // 应用旋转
       worldContainer.quaternion.copy(currentQuaternion);
     }
 
