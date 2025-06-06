@@ -42,7 +42,7 @@
 </head>
 <body>
   <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 ARv7 体验</button>
+  <button id="permission-btn" style="display: none;">点击启动 AR8 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -65,8 +65,8 @@
     let initialOrientation = null;
     let hasGyroscope = false;
     let calibrationFrames = 0;
-    let lastValidRotationY = 0;  // 记录最后的有效旋转值
-    let gyroscopeEnabled = true; // 陀螺仪是否启用
+    let currentRotationY = 0;  // 当前实际的Y轴旋转
+    let lastUpdateTime = Date.now();  // 上次更新时间
     
     // 世界空间容器（用于固定气球在世界坐标中）
     let worldContainer;
@@ -180,42 +180,22 @@
       if (!hasGyroscope || !initialOrientation) return;
       
       // ========== 可调参数 ==========
-      const smoothingFactor = 0.15;     // 平滑度
-      const verticalMinBeta = 80;       // 竖直检测最小角度
-      const verticalMaxBeta = 100;      // 竖直检测最大角度
+      const smoothingFactor = 0.1;      // 基础平滑度
+      const maxRotationSpeed = 2;       // 最大旋转速度（度/帧）
+      const verticalDamping = 5;        // 竖直时的阻尼系数
       // ==============================
       
-      // 获取当前beta角度
+      // 获取当前时间
+      const currentTime = Date.now();
+      const deltaTime = Math.min((currentTime - lastUpdateTime) / 16.67, 2); // 归一化到60fps
+      lastUpdateTime = currentTime;
+      
+      // 获取当前角度
       const beta = deviceOrientation.beta;
+      const alpha = deviceOrientation.alpha;
       
-      // 检测是否接近竖直
-      // beta在80-100度之间时禁用（手机接近竖直持握状态）
-      const isNearVertical = (beta >= verticalMinBeta && beta <= verticalMaxBeta);
-      
-      // 状态变化检测
-      if (isNearVertical && gyroscopeEnabled) {
-        // 刚进入竖直状态，保存当前旋转并禁用陀螺仪
-        lastValidRotationY = worldContainer.rotation.y;
-        gyroscopeEnabled = false;
-        console.log('进入竖直状态，陀螺仪已禁用');
-      } else if (!isNearVertical && !gyroscopeEnabled) {
-        // 离开竖直状态，重新启用陀螺仪
-        gyroscopeEnabled = true;
-        // 重新校准初始方向，避免突然跳动
-        initialOrientation.alpha = deviceOrientation.alpha - THREE.MathUtils.radToDeg(lastValidRotationY);
-        console.log('离开竖直状态，陀螺仪已启用');
-      }
-      
-      if (!gyroscopeEnabled) {
-        // 陀螺仪禁用时，保持最后的旋转值
-        worldContainer.rotation.y = lastValidRotationY;
-        worldContainer.rotation.x = 0;
-        worldContainer.rotation.z = 0;
-        return;
-      }
-      
-      // 正常计算旋转（只在非竖直状态下）
-      let deltaAlpha = deviceOrientation.alpha - initialOrientation.alpha;
+      // 计算目标旋转
+      let deltaAlpha = alpha - initialOrientation.alpha;
       
       // 处理360度边界
       if (deltaAlpha > 180) deltaAlpha -= 360;
@@ -224,24 +204,38 @@
       // 转换为弧度
       const targetRotationY = -THREE.MathUtils.degToRad(deltaAlpha);
       
-      // 计算旋转差异
-      let rotationDiff = targetRotationY - worldContainer.rotation.y;
+      // 计算与当前旋转的差异
+      let rotationDiff = targetRotationY - currentRotationY;
       
       // 确保差异在-PI到PI之间
       if (rotationDiff > Math.PI) rotationDiff -= Math.PI * 2;
       if (rotationDiff < -Math.PI) rotationDiff += Math.PI * 2;
       
-      // 应用平滑旋转
-      worldContainer.rotation.y += rotationDiff * smoothingFactor;
+      // 计算竖直程度（0-1，1表示完全竖直）
+      const verticalness = Math.abs(beta - 90) < 30 ? 1 - Math.abs(beta - 90) / 30 : 0;
       
-      // 确保Y旋转在合理范围内
-      if (worldContainer.rotation.y > Math.PI) worldContainer.rotation.y -= Math.PI * 2;
-      if (worldContainer.rotation.y < -Math.PI) worldContainer.rotation.y += Math.PI * 2;
+      // 根据竖直程度调整平滑因子和速度限制
+      const adaptiveSmoothing = smoothingFactor * (1 - verticalness * 0.9); // 越竖直越慢
+      const adaptiveSpeedLimit = maxRotationSpeed * (1 - verticalness * 0.8); // 越竖直速度越慢
       
-      // 更新最后的有效旋转值
-      lastValidRotationY = worldContainer.rotation.y;
+      // 限制旋转速度
+      const maxRotationRad = THREE.MathUtils.degToRad(adaptiveSpeedLimit * deltaTime);
+      rotationDiff = THREE.MathUtils.clamp(rotationDiff, -maxRotationRad, maxRotationRad);
       
-      // 保持其他轴为0
+      // 应用额外的阻尼
+      if (verticalness > 0) {
+        rotationDiff *= (1 - verticalness * 0.5);
+      }
+      
+      // 应用旋转
+      currentRotationY += rotationDiff * adaptiveSmoothing;
+      
+      // 确保旋转值在合理范围内
+      if (currentRotationY > Math.PI) currentRotationY -= Math.PI * 2;
+      if (currentRotationY < -Math.PI) currentRotationY += Math.PI * 2;
+      
+      // 更新世界容器
+      worldContainer.rotation.y = currentRotationY;
       worldContainer.rotation.x = 0;
       worldContainer.rotation.z = 0;
     }
