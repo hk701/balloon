@@ -42,7 +42,7 @@
 </head>
 <body>
   <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 AR8 体验</button>
+  <button id="permission-btn" style="display: none;">点击启动 AR9 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -65,8 +65,8 @@
     let initialOrientation = null;
     let hasGyroscope = false;
     let calibrationFrames = 0;
-    let currentRotationY = 0;  // 当前实际的Y轴旋转
-    let lastUpdateTime = Date.now();  // 上次更新时间
+    let currentQuaternion = new THREE.Quaternion();
+    let targetQuaternion = new THREE.Quaternion();
     
     // 世界空间容器（用于固定气球在世界坐标中）
     let worldContainer;
@@ -180,64 +180,41 @@
       if (!hasGyroscope || !initialOrientation) return;
       
       // ========== 可调参数 ==========
-      const smoothingFactor = 0.1;      // 基础平滑度
-      const maxRotationSpeed = 2;       // 最大旋转速度（度/帧）
-      const verticalDamping = 5;        // 竖直时的阻尼系数
+      const smoothingFactor = 0.15;  // 平滑度：0.01-1.0
+      const verticalLockThreshold = 30; // 垂直锁定阈值（度）
       // ==============================
       
-      // 获取当前时间
-      const currentTime = Date.now();
-      const deltaTime = Math.min((currentTime - lastUpdateTime) / 16.67, 2); // 归一化到60fps
-      lastUpdateTime = currentTime;
-      
-      // 获取当前角度
+      // 获取设备的beta角度（-180到180）
       const beta = deviceOrientation.beta;
-      const alpha = deviceOrientation.alpha;
       
-      // 计算目标旋转
-      let deltaAlpha = alpha - initialOrientation.alpha;
+      // 检测是否接近垂直（朝上或朝下）
+      const isNearVertical = (beta > -verticalLockThreshold && beta < verticalLockThreshold) || 
+                            (beta > 180 - verticalLockThreshold || beta < -180 + verticalLockThreshold);
       
-      // 处理360度边界
-      if (deltaAlpha > 180) deltaAlpha -= 360;
-      if (deltaAlpha < -180) deltaAlpha += 360;
-      
-      // 转换为弧度
-      const targetRotationY = -THREE.MathUtils.degToRad(deltaAlpha);
-      
-      // 计算与当前旋转的差异
-      let rotationDiff = targetRotationY - currentRotationY;
-      
-      // 确保差异在-PI到PI之间
-      if (rotationDiff > Math.PI) rotationDiff -= Math.PI * 2;
-      if (rotationDiff < -Math.PI) rotationDiff += Math.PI * 2;
-      
-      // 计算竖直程度（0-1，1表示完全竖直）
-      const verticalness = Math.abs(beta - 90) < 30 ? 1 - Math.abs(beta - 90) / 30 : 0;
-      
-      // 根据竖直程度调整平滑因子和速度限制
-      const adaptiveSmoothing = smoothingFactor * (1 - verticalness * 0.9); // 越竖直越慢
-      const adaptiveSpeedLimit = maxRotationSpeed * (1 - verticalness * 0.8); // 越竖直速度越慢
-      
-      // 限制旋转速度
-      const maxRotationRad = THREE.MathUtils.degToRad(adaptiveSpeedLimit * deltaTime);
-      rotationDiff = THREE.MathUtils.clamp(rotationDiff, -maxRotationRad, maxRotationRad);
-      
-      // 应用额外的阻尼
-      if (verticalness > 0) {
-        rotationDiff *= (1 - verticalness * 0.5);
+      if (isNearVertical) {
+        // 接近垂直时，只保持当前旋转，不更新
+        return;
       }
       
+      // 计算相对旋转（只在非垂直状态下）
+      let deltaAlpha = deviceOrientation.alpha - initialOrientation.alpha;
+      
+      // 使用正弦和余弦来避免360度跳变
+      const alphaRad = THREE.MathUtils.degToRad(deltaAlpha);
+      const x = Math.sin(alphaRad);
+      const z = Math.cos(alphaRad);
+      
+      // 从正弦余弦重建角度，这样可以平滑处理边界
+      const smoothedAlpha = Math.atan2(x, z);
+      
+      // 创建目标四元数（只绕Y轴旋转）
+      targetQuaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -smoothedAlpha);
+      
+      // 平滑插值当前四元数到目标四元数
+      currentQuaternion.slerp(targetQuaternion, smoothingFactor);
+      
       // 应用旋转
-      currentRotationY += rotationDiff * adaptiveSmoothing;
-      
-      // 确保旋转值在合理范围内
-      if (currentRotationY > Math.PI) currentRotationY -= Math.PI * 2;
-      if (currentRotationY < -Math.PI) currentRotationY += Math.PI * 2;
-      
-      // 更新世界容器
-      worldContainer.rotation.y = currentRotationY;
-      worldContainer.rotation.x = 0;
-      worldContainer.rotation.z = 0;
+      worldContainer.quaternion.copy(currentQuaternion);
     }
 
     async function initCameraAndAudio() {
