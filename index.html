@@ -42,7 +42,7 @@
 </head>
 <body>
   <div id="info">对着麦克风说话释放红色气球 🎈</div>
-  <button id="permission-btn" style="display: none;">点击启动 ARv6 体验</button>
+  <button id="permission-btn" style="display: none;">点击启动 ARv7 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -181,17 +181,16 @@
       
       // ========== 可调参数 ==========
       const smoothingFactor = 0.15;     // 平滑度
-      const verticalThreshold = 20;     // 竖直检测阈值（度）
+      const verticalMinBeta = 80;       // 竖直检测最小角度
+      const verticalMaxBeta = 100;      // 竖直检测最大角度
       // ==============================
       
       // 获取当前beta角度
       const beta = deviceOrientation.beta;
       
       // 检测是否接近竖直
-      // beta接近0度（朝上）或接近180/-180度（朝下）时为竖直状态
-      const isNearVertical = (beta >= -verticalThreshold && beta <= verticalThreshold) || 
-                            (beta >= 180 - verticalThreshold) || 
-                            (beta <= -180 + verticalThreshold);
+      // beta在80-100度之间时禁用（手机接近竖直持握状态）
+      const isNearVertical = (beta >= verticalMinBeta && beta <= verticalMaxBeta);
       
       // 状态变化检测
       if (isNearVertical && gyroscopeEnabled) {
