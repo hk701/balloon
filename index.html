@@ -41,8 +41,8 @@
   </style>
 </head>
 <body>
-  
-  <button id="permission-btn" style="display: none;">点击启动 ARV3 体验</button>
+  <div id="info">对着麦克风说话释放红色气球 🎈</div>
+  <button id="permission-btn" style="display: none;">点击启动 ARv3 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -58,7 +58,6 @@
     const MAX_BALLOONS = 60;        // 最大气球数量
     const AUDIO_THRESHOLD = 5;     // 声音触发阈值
     const AUDIO_COOLDOWN = 100;     // 声音触发冷却时间(ms)
-    const verticalDeadZone = 80;  // 扩大到60-120度
     // ==================================
     
     // 陀螺仪相关变量
@@ -66,8 +65,8 @@
     let initialOrientation = null;
     let hasGyroscope = false;
     let calibrationFrames = 0;
-    let currentQuaternion = new THREE.Quaternion();
-    let targetQuaternion = new THREE.Quaternion();
+    let lastStableRotation = 0;  // 记录最后一次稳定的旋转值
+    let isInDeadZone = false;    // 是否在死区内
     
     // 世界空间容器（用于固定气球在世界坐标中）
     let worldContainer;
@@ -181,41 +180,54 @@
       if (!hasGyroscope || !initialOrientation) return;
       
       // ========== 可调参数 ==========
-      const smoothingFactor = 0.15;  // 平滑度：0.01-1.0
-      const verticalLockThreshold = 30; // 垂直锁定阈值（度）
+      const smoothingFactor = 0.15;     // 平滑度：0.01-1.0
+      const verticalDeadZone = 70;      // 垂直死区范围（70-110度为死区）
+      const transitionZone = 10;        // 过渡区域大小
       // ==============================
       
-      // 获取设备的beta角度（-180到180）
+      // 获取当前的beta角度
       const beta = deviceOrientation.beta;
       
-      // 检测是否接近垂直（朝上或朝下）
-      const isNearVertical = (beta > -verticalLockThreshold && beta < verticalLockThreshold) || 
-                            (beta > 180 - verticalLockThreshold || beta < -180 + verticalLockThreshold);
+      // 定义死区：当手机接近垂直时（beta在70-110度之间）
+      const inDeadZone = beta > verticalDeadZone && beta < (180 - verticalDeadZone);
+      const nearDeadZone = (beta > verticalDeadZone - transitionZone && beta < verticalDeadZone) ||
+                          (beta > (180 - verticalDeadZone) && beta < (180 - verticalDeadZone + transitionZone));
       
-      if (isNearVertical) {
-        // 接近垂直时，只保持当前旋转，不更新
+      // 如果刚进入死区，保存当前旋转
+      if (inDeadZone && !isInDeadZone) {
+        lastStableRotation = worldContainer.rotation.y;
+        isInDeadZone = true;
+      } else if (!inDeadZone && isInDeadZone) {
+        // 离开死区
+        isInDeadZone = false;
+      }
+      
+      if (inDeadZone) {
+        // 在死区内，保持最后的旋转不变
+        worldContainer.rotation.y = lastStableRotation;
         return;
       }
       
-      // 计算相对旋转（只在非垂直状态下）
+      // 计算目标旋转
       let deltaAlpha = deviceOrientation.alpha - initialOrientation.alpha;
       
-      // 使用正弦和余弦来避免360度跳变
-      const alphaRad = THREE.MathUtils.degToRad(deltaAlpha);
-      const x = Math.sin(alphaRad);
-      const z = Math.cos(alphaRad);
+      // 处理360度边界
+      if (deltaAlpha > 180) deltaAlpha -= 360;
+      if (deltaAlpha < -180) deltaAlpha += 360;
       
-      // 从正弦余弦重建角度，这样可以平滑处理边界
-      const smoothedAlpha = Math.atan2(x, z);
+      const targetRotationY = -THREE.MathUtils.degToRad(deltaAlpha);
       
-      // 创建目标四元数（只绕Y轴旋转）
-      targetQuaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -smoothedAlpha);
+      // 如果在过渡区，使用更慢的平滑速度
+      const currentSmoothing = nearDeadZone ? smoothingFactor * 0.3 : smoothingFactor;
       
-      // 平滑插值当前四元数到目标四元数
-      currentQuaternion.slerp(targetQuaternion, smoothingFactor);
+      // 平滑过渡
+      if (!isInDeadZone) {
+        worldContainer.rotation.y += (targetRotationY - worldContainer.rotation.y) * currentSmoothing;
+      }
       
-      // 应用旋转
-      worldContainer.quaternion.copy(currentQuaternion);
+      // 保持其他轴为0
+      worldContainer.rotation.x = 0;
+      worldContainer.rotation.z = 0;
     }
 
     async function initCameraAndAudio() {
