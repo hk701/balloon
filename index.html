@@ -41,7 +41,8 @@
   </style>
 </head>
 <body>
-  <button id="permission-btn" style="display: none;">点击启动 AR6 体验</button>
+  
+  <button id="permission-btn" style="display: none;">点击启动 ARV 体验</button>
   
   <script type="module">
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
@@ -54,8 +55,8 @@
     let isAudioReady = false;
     
     // ========== 全局可调参数 ==========
-    const MAX_BALLOONS = 30;        // 最大气球数量
-    const AUDIO_THRESHOLD = 25;     // 声音触发阈值
+    const MAX_BALLOONS = 60;        // 最大气球数量
+    const AUDIO_THRESHOLD = 5;     // 声音触发阈值
     const AUDIO_COOLDOWN = 100;     // 声音触发冷却时间(ms)
     // ==================================
     
@@ -64,7 +65,8 @@
     let initialOrientation = null;
     let hasGyroscope = false;
     let calibrationFrames = 0;
-    let lastValidAlpha = 0;  // 记录上一次有效的alpha值
+    let currentQuaternion = new THREE.Quaternion();
+    let targetQuaternion = new THREE.Quaternion();
     
     // 世界空间容器（用于固定气球在世界坐标中）
     let worldContainer;
@@ -179,66 +181,40 @@
       
       // ========== 可调参数 ==========
       const smoothingFactor = 0.15;  // 平滑度：0.01-1.0
-      const sensitivity = 1.0;        // 灵敏度：0.5-2.0
-      const deadZone = 2;            // 死区：0-10度
-      const enableTilt = false;       // 是否启用俯仰
-      const tiltLimit = 30;          // 俯仰限制角度
-      const tiltFactor = 0.3;        // 俯仰影响系数
+      const verticalLockThreshold = 30; // 垂直锁定阈值（度）
       // ==============================
       
-      // 当设备接近垂直时，alpha值会不稳定
-      // 使用beta角度来检测是否接近垂直
-      const isNearVertical = Math.abs(deviceOrientation.beta) < 20 || 
-                            Math.abs(deviceOrientation.beta) > 160;
+      // 获取设备的beta角度（-180到180）
+      const beta = deviceOrientation.beta;
       
-      let deltaAlpha;
+      // 检测是否接近垂直（朝上或朝下）
+      const isNearVertical = (beta > -verticalLockThreshold && beta < verticalLockThreshold) || 
+                            (beta > 180 - verticalLockThreshold || beta < -180 + verticalLockThreshold);
       
       if (isNearVertical) {
-        // 接近垂直时，使用上一次的有效值，避免突变
-        deltaAlpha = lastValidAlpha;
-      } else {
-        // 正常情况下计算旋转
-        deltaAlpha = deviceOrientation.alpha - initialOrientation.alpha;
-        
-        // 处理360度边界
-        if (deltaAlpha > 180) deltaAlpha -= 360;
-        if (deltaAlpha < -180) deltaAlpha += 360;
-        
-        // 检测突变（如果变化超过90度，可能是异常）
-        const alphaDiff = Math.abs(deltaAlpha - lastValidAlpha);
-        if (alphaDiff > 90 && alphaDiff < 270) {
-          // 发生突变，使用插值而不是直接跳转
-          deltaAlpha = lastValidAlpha + (deltaAlpha - lastValidAlpha) * 0.1;
-        }
-        
-        // 更新最后有效值
-        lastValidAlpha = deltaAlpha;
+        // 接近垂直时，只保持当前旋转，不更新
+        return;
       }
       
-      // 应用死区
-      if (Math.abs(deltaAlpha) < deadZone) deltaAlpha = 0;
+      // 计算相对旋转（只在非垂直状态下）
+      let deltaAlpha = deviceOrientation.alpha - initialOrientation.alpha;
       
-      // 应用灵敏度
-      deltaAlpha *= sensitivity;
+      // 使用正弦和余弦来避免360度跳变
+      const alphaRad = THREE.MathUtils.degToRad(deltaAlpha);
+      const x = Math.sin(alphaRad);
+      const z = Math.cos(alphaRad);
       
-      // 转换为弧度
-      const targetRotationY = -THREE.MathUtils.degToRad(deltaAlpha);
+      // 从正弦余弦重建角度，这样可以平滑处理边界
+      const smoothedAlpha = Math.atan2(x, z);
       
-      // 平滑过渡Y轴
-      worldContainer.rotation.y += (targetRotationY - worldContainer.rotation.y) * smoothingFactor;
+      // 创建目标四元数（只绕Y轴旋转）
+      targetQuaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -smoothedAlpha);
       
-      // 处理俯仰（可选）
-      if (enableTilt && !isNearVertical) {
-        let deltaBeta = deviceOrientation.beta - initialOrientation.beta;
-        deltaBeta = Math.max(-tiltLimit, Math.min(tiltLimit, deltaBeta));
-        const targetRotationX = -THREE.MathUtils.degToRad(deltaBeta) * tiltFactor;
-        worldContainer.rotation.x += (targetRotationX - worldContainer.rotation.x) * smoothingFactor;
-      } else {
-        worldContainer.rotation.x = 0;
-      }
+      // 平滑插值当前四元数到目标四元数
+      currentQuaternion.slerp(targetQuaternion, smoothingFactor);
       
-      // Z轴始终保持为0
-      worldContainer.rotation.z = 0;
+      // 应用旋转
+      worldContainer.quaternion.copy(currentQuaternion);
     }
 
     async function initCameraAndAudio() {
